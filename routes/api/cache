@@ -1,0 +1,135 @@
+const express = require("express");
+const router = express.Router();
+const { check, validationResult } = require("express-validator/check");
+
+const Cache = require("../../models/Cache");
+
+router.post('/', [
+    check('key', 'Pass a key').not().isEmpty(),
+], async (req, res) => {
+    const errors = validationResult(req);
+
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { key, value } = req.body;
+
+    try {
+        let cache = await Cache.findOne({ key });
+
+        if (cache) {
+            // update record
+            Cache.updateOne({ key }, {
+                value,
+                updated_at: new Date()
+            }, (err, docs) => {
+                if (err) {
+                    return res.status(500).send("Error Occurred");
+                } else {
+                    console.log(docs);
+                    return res.status(200).send("Cache Updated");
+                }
+            });
+            console.log(res);
+        } else {
+            let count = await Cache.count();
+            if (count >= 10) {        // Restricting number of items to 10
+                // Sorting in descencing updated date, picking up the oldest record, and deleting it.
+                const recToDel = await Cache.find().select("key").sort({ "updated_at": -1 }).limit(1);
+                console.log(recToDel[0].id);
+                await Cache.findOneAndRemove({ _id: recToDel[0].id });
+            }
+            cache = new Cache({
+                key,
+                value
+            });
+            await cache.save();
+            return res.status(200).send("Cache Added");
+        }
+    } catch (error) {
+        return res.status(500).send("Error Occurred");
+    }
+});
+
+router.get('/', async (req, res) => {
+    try {
+        const cacheData = await Cache.find();
+        return res.status(200).send(cacheData);
+    } catch (error) {
+        console.error(error);
+        res.status(500).send("Error Occurred");
+    }
+});
+
+router.get('/keys', async (req, res) => {
+    try {
+        const cacheData = await Cache.find().select('key -_id');
+        return res.status(200).send(cacheData);
+    } catch (error) {
+        console.error(error);
+        res.status(500).send("Error Occurred");
+    }
+});
+
+router.get('/:key', async (req, res) => {
+    const { key } = req.params;
+    try {
+        const cacheData = await Cache.findOne({ key });
+        if (!cacheData) {
+            console.log('Cache miss');
+            let str = 'Random String';
+            let cache = new Cache({
+                key,
+                value: str
+            });
+            cache = await cache.save();
+            return res.status(200).json(cache);     // Returning complete object instead of randon string to maintain consistency
+        }
+        console.log('“Cache hit');
+
+        // Check for TTL expiry
+        let updatedTimeStamp = new Date(cacheData.updated_at).getTime();
+        let currentTimeStamp = new Date().getTime();
+        if (currentTimeStamp - updatedTimeStamp > cacheData.ttl) {
+            Cache.updateOne({ key: cacheData.key }, {
+                value: 'Record Expired, filling alternate value now.',
+                updated_at: new Date()
+            }, (err, docs) => {
+                if (err) {
+                    return res.status(500).send("Error Occurred");
+                } else {
+                    console.log(docs);
+                    return res.status(200).send("Cache Expired, fillled with random data");
+                }
+            });
+        }
+
+        return res.status(200).send(cacheData);
+    } catch (error) {
+        console.error(error);
+        res.status(500).send("Error Occurred");
+    }
+});
+
+router.delete('/delete/:key', async (req, res) => {
+    try {
+        await Cache.findOneAndRemove({ key: req.params.key });
+        res.send(`Deleted ${req.params.key}`);
+    } catch (error) {
+        console.error(error);
+        res.status(500).send("Error Occurred");
+    }
+});
+
+router.delete('/deleteAll', async (req, res) => {
+    try {
+        await Cache.deleteMany({});
+        res.send(`Deleted All Records`);
+    } catch (error) {
+        console.error(error);
+        res.status(500).send("Error Occurred");
+    }
+});
+
+module.exports = router;
